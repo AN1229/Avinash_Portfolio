@@ -48,7 +48,10 @@ export function Education() {
                   </h3>
 
                   <p className="mt-1.5 text-body text-muted-foreground">
-                    {[entry.school, entry.location].filter(Boolean).join(" · ")}
+                    <span className="font-semibold text-foreground">
+                      {entry.school}
+                    </span>
+                    {entry.location && ` · ${entry.location}`}
                   </p>
 
                   {entry.focus && (
