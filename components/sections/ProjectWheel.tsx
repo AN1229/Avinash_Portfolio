@@ -1,0 +1,353 @@
+"use client";
+
+/**
+ * The projects as a wheel: cards ride a large, half-buried circle that turns as
+ * the section is scrolled, and whichever card reaches the top drives a detail
+ * panel above it.
+ *
+ * Two decisions worth knowing about, both departures from the component this
+ * was modelled on:
+ *
+ * The cards counter-rotate. The original baked a tangent rotation into each
+ * item and spun the container, so every card was sideways or upside down for
+ * most of the turn — fine for a photo with one word on it, useless for a
+ * project title. Here the ring's rotation is negated on each card, so they
+ * travel round the circle while staying upright.
+ *
+ * There is no GSAP. The original pulled in gsap, ScrollTrigger and @gsap/react,
+ * about 95 KB gzipped, for a scrub tween and a pin. `motion` is already in the
+ * bundle and gives the same scrub through `useScroll`, and `position: sticky`
+ * pins better than ScrollTrigger does — no injected spacer elements, no
+ * refresh() on resize.
+ *
+ * The rim carries a picture and a title. Everything that has to be read or
+ * clicked — summary, impact, skills, links — lives in the static panel, which
+ * is the only place a link can be both reachable and not spinning.
+ */
+
+import { useEffect, useRef, useState } from "react";
+import {
+  AnimatePresence,
+  motion,
+  useMotionValueEvent,
+  useScroll,
+  useSpring,
+  useTransform,
+} from "motion/react";
+import { Badge } from "@/components/ui/badge";
+import {
+  ProjectImpact,
+  ProjectLinks,
+  ProjectVisual,
+  type Project,
+} from "./ProjectParts";
+import { cn } from "@/lib/utils";
+import { projects } from "@/lib/data";
+
+/**
+ * Cards are about 1.95:1, a landscape screenshot's shape.
+ *
+ * Widths are bounded by the ring, since four slots sit 2·R·sin(45°) apart: 481px
+ * on the wide ring against a 400px card at 105%, and 318px on the compact one
+ * against 290px. The compact radius went up with the card to keep that gap.
+ *
+ * Height is what limits the compact set, not width: the panel and the visible
+ * arc have to share about 700px. Below that Projects falls back to the carousel.
+ */
+const SIZES = {
+  wide: { radius: 340, cardW: 400, cardH: 205, scrollPer: 320 },
+  compact: { radius: 225, cardW: 290, cardH: 149, scrollPer: 280 },
+};
+
+export function ProjectWheel({ compact = false }: { compact?: boolean }) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const count = projects.length;
+  // The ring always has at least four places. With three projects spaced a
+  // third of a turn apart, the two beside the top card sit below the visible
+  // arc and the wheel reads as a single card; at a quarter turn they stay in
+  // view, and the fourth place simply stays empty.
+  const slots = Math.max(count, 4);
+  const size = compact ? SIZES.compact : SIZES.wide;
+
+  const { scrollYProgress } = useScroll({
+    target: trackRef,
+    offset: ["start start", "end end"],
+  });
+
+  const [scrolled, setScrolled] = useState(0);
+  const [focused, setFocused] = useState<number | null>(null);
+
+  // Scroll picks which card is at the top; it does not drive the angle directly.
+  // Mapping rotation straight off progress meant the ring was only ever aligned
+  // at the exact instants progress hit i/(n-1), so a card sat squarely at the
+  // apex only if you scrolled to the pixel. Each project owns an equal slice of
+  // the track instead, and the spring below walks the ring between the stops.
+  useMotionValueEvent(scrollYProgress, "change", (value) => {
+    const slice = Math.floor(Math.max(0, Math.min(0.999, value)) * count);
+    setScrolled(Math.min(count - 1, slice));
+  });
+
+  // Softer and heavier than it was. At stiffness 120 the ring snapped to each
+  // stop and stopped dead; a lower stiffness with more mass makes it lean into
+  // the turn and settle, which is what a wheel of this size would actually do.
+  // Damping stays just under critical so it eases in without wobbling.
+  const rotate = useSpring(0, { stiffness: 55, damping: 18, mass: 1.1 });
+  const counterRotate = useTransform(rotate, (value) => -value);
+
+  useEffect(() => {
+    rotate.set(-(scrolled * 360) / slots);
+  }, [slots, rotate, scrolled]);
+
+  // Pointing at a card wins over the scroll position, so someone can look
+  // around the ring without having to scroll back and forth.
+  const active = focused ?? scrolled;
+  const project = projects[active];
+
+  return (
+    <div
+      ref={trackRef}
+      // One slice per project, not per gap: the last card used to reach the top
+      // at the exact scroll position where the sticky panel unsticks, so it was
+      // gone before it could be read. Its slice now holds it there.
+      style={{ height: `calc(100vh + ${count * size.scrollPer}px)` }}
+    >
+      <div
+        className={cn(
+          "sticky top-0 flex h-screen flex-col overflow-hidden",
+          compact ? "pt-20" : "pt-24",
+        )}
+      >
+        <Detail
+          project={project}
+          index={active}
+          count={count}
+          compact={compact}
+        />
+
+        {/* The ring. Cropped at the bottom and faded out, so it reads as
+            something larger than the viewport rather than a floating circle. */}
+        <div
+          className={cn("relative flex-1", compact ? "mt-5" : "mt-8")}
+          style={{
+            maskImage:
+              "linear-gradient(to bottom, black 0%, black 62%, transparent 96%)",
+            WebkitMaskImage:
+              "linear-gradient(to bottom, black 0%, black 62%, transparent 96%)",
+          }}
+        >
+          <motion.ul
+            className="absolute left-1/2 m-0 list-none p-0"
+            style={{
+              width: size.radius * 2,
+              height: size.radius * 2,
+              top: size.cardH / 2,
+              x: "-50%",
+              rotate,
+            }}
+          >
+            {projects.map((item, index) => {
+              // Card 0 sits at the top of the circle; the rest follow clockwise.
+              const angle = (index / slots) * 2 * Math.PI;
+              const x = size.radius * Math.sin(angle);
+              const y = -size.radius * Math.cos(angle);
+
+              return (
+                <li
+                  key={item.id}
+                  className="absolute left-1/2 top-1/2"
+                  style={{
+                    transform: `translate(-50%, -50%) translate3d(${x}px, ${y}px, 0)`,
+                  }}
+                >
+                  <motion.div style={{ rotate: counterRotate }}>
+                    <RimCard
+                      project={item}
+                      width={size.cardW}
+                      height={size.cardH}
+                      isActive={index === active}
+                      dimmed={focused !== null && focused !== index}
+                      onFocus={() => setFocused(index)}
+                      onBlur={() => setFocused(null)}
+                    />
+                  </motion.div>
+                </li>
+              );
+            })}
+          </motion.ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Detail({
+  project,
+  index,
+  count,
+  compact,
+}: {
+  project: Project;
+  index: number;
+  count: number;
+  compact: boolean;
+}) {
+  return (
+    <div className="mx-auto w-full max-w-3xl shrink-0 px-6 text-center">
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={project.id}
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -12 }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
+        >
+          <p className="font-heading text-sm font-bold text-brand">
+            {project.id}{" "}
+            <span className="text-muted-foreground">
+              / {String(count).padStart(2, "0")}
+            </span>
+          </p>
+
+          <h3
+            className={cn(
+              "mt-2 font-bold leading-[1.15] tracking-[-0.025em] text-foreground",
+              compact ? "text-xl" : "mt-3 text-2xl md:text-4xl",
+            )}
+          >
+            {project.title}
+          </h3>
+
+          <p
+            className={cn(
+              "text-muted-foreground",
+              compact ? "mt-1 text-label" : "mt-2 text-meta",
+            )}
+          >
+            {project.context} · {project.period}
+          </p>
+
+          <p
+            className={cn(
+              "mx-auto max-w-2xl text-muted-foreground",
+              compact ? "mt-3 line-clamp-4 text-meta" : "mt-4 text-body",
+            )}
+          >
+            {project.summary}
+          </p>
+
+          <ProjectImpact
+            project={project}
+            compact={compact}
+            className={cn(
+              "mx-auto max-w-lg text-left",
+              compact ? "mt-3" : "mt-6",
+            )}
+          />
+
+          <div
+            className={cn(
+              "flex flex-wrap justify-center gap-2",
+              compact ? "mt-3" : "mt-5",
+            )}
+          >
+            {project.skills.slice(0, compact ? 3 : 4).map((skill) => (
+              <Badge
+                key={skill}
+                variant="outline"
+                className="h-auto border-brand/30 px-3 py-1 text-label text-muted-foreground"
+              >
+                {skill}
+              </Badge>
+            ))}
+          </div>
+
+          <ProjectLinks
+            project={project}
+            className={cn("justify-center", compact ? "mt-3" : "mt-5")}
+          />
+        </motion.div>
+      </AnimatePresence>
+
+      {/* Fixed-height rail under the panel: a progress read-out that does not
+          reflow when a longer title swaps in. */}
+      <div
+        className={cn("mx-auto flex w-40 gap-1.5", compact ? "mt-5" : "mt-8")}
+        aria-hidden="true"
+      >
+        {Array.from({ length: count }, (_, i) => (
+          <span
+            key={i}
+            className={cn(
+              "h-0.5 flex-1 rounded-full transition-colors duration-300",
+              i === index ? "bg-brand" : "bg-border",
+            )}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RimCard({
+  project,
+  width,
+  height,
+  isActive,
+  dimmed,
+  onFocus,
+  onBlur,
+}: {
+  project: Project;
+  width: number;
+  height: number;
+  isActive: boolean;
+  dimmed: boolean;
+  onFocus: () => void;
+  onBlur: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onMouseEnter={onFocus}
+      onMouseLeave={onBlur}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      aria-label={project.title}
+      style={{ width, height }}
+      className={cn(
+        "group relative block overflow-hidden rounded-xl border bg-background text-left shadow-lg outline-none transition-all duration-500 ease-out focus-visible:ring-2 focus-visible:ring-brand",
+        isActive
+          ? "-translate-y-3 scale-105 border-brand/50"
+          : "scale-100 border-border",
+        dimmed && "opacity-40 grayscale",
+      )}
+    >
+      <ProjectVisual
+        project={project}
+        sizes="440px"
+        className={cn(
+          "transition-transform duration-700 ease-out",
+          isActive ? "scale-105" : "scale-100",
+        )}
+      />
+      {/* The scrim covers the lower third, where the title sits, rather than
+          washing over the whole picture. */}
+      <div className="absolute inset-0 bg-gradient-to-t from-background via-background/70 via-30% to-transparent to-60%" />
+
+      <div className="absolute inset-x-0 bottom-0 p-4">
+        <p className="font-heading text-[11px] font-bold text-brand">
+          {project.id}
+        </p>
+        <p className="mt-0.5 line-clamp-1 text-base font-semibold leading-tight text-foreground">
+          {project.title}
+        </p>
+        <span
+          className={cn(
+            "mt-2 block h-0.5 rounded-full bg-brand transition-all duration-500",
+            isActive ? "w-full opacity-100" : "w-0 opacity-0",
+          )}
+        />
+      </div>
+    </button>
+  );
+}
