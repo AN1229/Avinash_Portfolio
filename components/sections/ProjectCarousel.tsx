@@ -20,6 +20,7 @@ import {
   ProjectImpact,
   ProjectLinks,
   ProjectVisual,
+  ProjectVisualZoom,
   type Project,
 } from "./ProjectParts";
 import { useMediaQuery } from "@/lib/use-media-query";
@@ -109,6 +110,7 @@ function Card({ project }: { project: Project }) {
           project={project}
           sizes="(max-width: 480px) 90vw, 448px"
         />
+        <ProjectVisualZoom project={project} />
       </div>
 
       <div className="flex flex-1 flex-col p-5">

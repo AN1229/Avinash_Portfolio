@@ -4,14 +4,22 @@
  * visitor gets.
  */
 
+import type { ReactElement } from "react";
 import Image from "next/image";
 import {
   ArrowUpRight,
   Building2,
   HeartPulse,
+  Maximize2,
   Trophy,
   type LucideIcon,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type { projects } from "@/lib/data";
 
@@ -24,7 +32,8 @@ const visualIcons: Record<string, LucideIcon> = {
 };
 
 /**
- * The project's picture: its image when it has one, otherwise a drawn panel —
+ * The project's picture: its image when it has one, fitted whole inside the
+ * frame, otherwise a drawn panel —
  * the keyword large over a faint grid, the icon in the corner. Fills its
  * parent, which sets the size and shape.
  */
@@ -44,7 +53,8 @@ export function ProjectVisual({
         alt=""
         fill
         sizes={sizes}
-        className={cn("object-cover", className)}
+        // Fitted, not cropped: the whole picture shows, whatever its shape.
+        className={cn("object-contain", className)}
       />
     );
   }
@@ -69,6 +79,89 @@ export function ProjectVisual({
         {project.visual.keyword}
       </span>
     </div>
+  );
+}
+
+/**
+ * The corner chip that says a picture opens larger. Decoration only: whatever
+ * it sits in is the thing that is clicked.
+ */
+export function ExpandHint({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "pointer-events-none absolute right-3 top-3 flex items-center gap-1.5 rounded-full border border-border bg-background/80 px-2.5 py-1 text-label text-foreground backdrop-blur-sm",
+        className,
+      )}
+    >
+      <Maximize2 className="size-3.5" />
+      View
+    </span>
+  );
+}
+
+/**
+ * The project's image at full size. A card is far too small to read a
+ * screenshot strip in, so this is where it is actually read.
+ *
+ * Its own width and height are not known here — images are set by path in
+ * `lib/data.ts` — so it is sized by CSS and keeps whatever shape the file has.
+ * On a phone the strip scrolls sideways rather than shrinking past legibility.
+ */
+export function ProjectImageDialog({
+  project,
+  open,
+  onOpenChange,
+  trigger,
+}: {
+  project: Project;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  trigger?: ReactElement;
+}) {
+  if (!project.image) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {trigger && <DialogTrigger render={trigger} />}
+      <DialogContent className="gap-3 p-3 sm:max-w-[min(1600px,calc(100%-4rem))]">
+        <DialogTitle className="py-1.5 pl-1 pr-10">{project.title}</DialogTitle>
+        <div className="overflow-x-auto rounded-lg">
+          <Image
+            src={project.image}
+            alt={`${project.title}: screens`}
+            width={0}
+            height={0}
+            sizes="(max-width: 640px) 960px, 100vw"
+            className="h-auto w-full min-w-[960px] sm:min-w-0"
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * A picture frame's click target: covers the frame and opens the image.
+ * Renders nothing for a project without an image.
+ */
+export function ProjectVisualZoom({ project }: { project: Project }) {
+  if (!project.image) return null;
+
+  return (
+    <ProjectImageDialog
+      project={project}
+      trigger={
+        <button
+          type="button"
+          aria-label={`View ${project.title} image full size`}
+          className="absolute inset-0 cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+        >
+          <ExpandHint />
+        </button>
+      }
+    />
   );
 }
 

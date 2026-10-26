@@ -20,9 +20,10 @@
  * pins better than ScrollTrigger does — no injected spacer elements, no
  * refresh() on resize.
  *
- * The rim carries a picture and a title. Everything that has to be read or
+ * The rim carries a picture and a title, the picture shown whole. Everything that has to be read or
  * clicked — summary, impact, skills, links — lives in the static panel, which
- * is the only place a link can be both reachable and not spinning.
+ * is the only place a link can be both reachable and not spinning. The one
+ * exception is a card with an image: clicking it opens the image full size.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -36,6 +37,7 @@ import {
 } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import {
+  ProjectImageDialog,
   ProjectImpact,
   ProjectLinks,
   ProjectVisual,
@@ -45,19 +47,79 @@ import { cn } from "@/lib/utils";
 import { projects } from "@/lib/data";
 
 /**
- * Cards are about 1.95:1, a landscape screenshot's shape.
- *
- * Widths are bounded by the ring, since four slots sit 2·R·sin(45°) apart: 481px
- * on the wide ring against a 400px card at 105%, and 318px on the compact one
- * against 290px. The compact radius went up with the card to keep that gap.
- *
- * Height is what limits the compact set, not width: the panel and the visible
- * arc have to share about 700px. Below that Projects falls back to the carousel.
+ * The picture on a card has the Skiaverse screen strip's shape (1920×593), so
+ * that strip shows whole, and the title sits in a footer under it rather than
+ * over it. Pictures of any other shape are fitted inside, never cropped.
  */
-const SIZES = {
-  wide: { radius: 340, cardW: 400, cardH: 205, scrollPer: 320 },
-  compact: { radius: 225, cardW: 290, cardH: 149, scrollPer: 280 },
+const VISUAL_ASPECT = 1920 / 593;
+const FOOTER_H = 64;
+const MAX_CARD_W = 960;
+/** The active card lifts 12px and grows to 105%; both need room. */
+const ACTIVE_SCALE = 1.05;
+const LIFT = 12;
+
+type CardSize = {
+  radius: number;
+  cardW: number;
+  cardH: number;
+  visualH: number;
+  /** Headroom over the resting card, so the active one does not lift out of view. */
+  inset: number;
 };
+
+/**
+ * The card is as large as the space under the panel allows: the full width
+ * of the window less a margin, unless the height runs out first.
+ *
+ * Widths are bounded by the ring, since four slots sit 2·R·sin(45°) apart, so
+ * the radius follows the card. The cards beside the top one sit a radius
+ * below it, out of view, which is what makes the wheel read as larger than
+ * the window.
+ */
+function cardSize(w: number, h: number): CardSize {
+  const fromWidth = (Math.min(MAX_CARD_W, w - 48)) / ACTIVE_SCALE;
+  // Lifted and grown, the active card spans 105% of its height from the top
+  // of the ring. It stops short of the fade at the bottom, with a margin, so
+  // the whole card is on screen with the panel above it.
+  const fromHeight =
+    ((Math.min(h * 0.92, h - 28)) / ACTIVE_SCALE - FOOTER_H) * VISUAL_ASPECT;
+  const cardW = Math.max(240, Math.min(fromWidth, fromHeight));
+  const visualH = cardW / VISUAL_ASPECT;
+  const cardH = visualH + FOOTER_H;
+  return {
+    radius: (cardW * ACTIVE_SCALE) / Math.SQRT2 + 24,
+    cardW,
+    cardH,
+    visualH,
+    inset: LIFT + (cardH * (ACTIVE_SCALE - 1)) / 2,
+  };
+}
+
+/**
+ * Measures the ring's space, but only re-measures when the window changes.
+ * The panel above it changes height from one project to the next, and the
+ * cards should not resize as the wheel turns.
+ */
+function useRingSize() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState(() => cardSize(1024, 380));
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let windowKey = "";
+    const observer = new ResizeObserver(([entry]) => {
+      const key = `${window.innerWidth}x${window.innerHeight}`;
+      if (key === windowKey) return;
+      windowKey = key;
+      setSize(cardSize(entry.contentRect.width, entry.contentRect.height));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return { ref, size };
+}
 
 export function ProjectWheel({ compact = false }: { compact?: boolean }) {
   const trackRef = useRef<HTMLDivElement>(null);
@@ -67,7 +129,8 @@ export function ProjectWheel({ compact = false }: { compact?: boolean }) {
   // arc and the wheel reads as a single card; at a quarter turn they stay in
   // view, and the fourth place simply stays empty.
   const slots = Math.max(count, 4);
-  const size = compact ? SIZES.compact : SIZES.wide;
+  const scrollPer = compact ? 280 : 320;
+  const { ref: ringRef, size } = useRingSize();
 
   const { scrollYProgress } = useScroll({
     target: trackRef,
@@ -76,6 +139,10 @@ export function ProjectWheel({ compact = false }: { compact?: boolean }) {
 
   const [scrolled, setScrolled] = useState(0);
   const [focused, setFocused] = useState<number | null>(null);
+  // Which project's image is open, kept apart from `open` so the dialog still
+  // has its picture while it animates closed.
+  const [viewing, setViewing] = useState(0);
+  const [viewerOpen, setViewerOpen] = useState(false);
 
   // Scroll picks which card is at the top; it does not drive the angle directly.
   // Mapping rotation straight off progress meant the ring was only ever aligned
@@ -109,12 +176,13 @@ export function ProjectWheel({ compact = false }: { compact?: boolean }) {
       // One slice per project, not per gap: the last card used to reach the top
       // at the exact scroll position where the sticky panel unsticks, so it was
       // gone before it could be read. Its slice now holds it there.
-      style={{ height: `calc(100vh + ${count * size.scrollPer}px)` }}
+      style={{ height: `calc(100vh + ${count * scrollPer}px)` }}
     >
       <div
         className={cn(
           "sticky top-0 flex h-screen flex-col overflow-hidden",
-          compact ? "pt-20" : "pt-24",
+          // Just clears the navbar (72px), so the panel and card both fit.
+          "pt-20",
         )}
       >
         <Detail
@@ -124,15 +192,17 @@ export function ProjectWheel({ compact = false }: { compact?: boolean }) {
           compact={compact}
         />
 
-        {/* The ring. Cropped at the bottom and faded out, so it reads as
-            something larger than the viewport rather than a floating circle. */}
+        {/* The ring. Cropped at the bottom and faded out at the very edge, so
+            it reads as something larger than the viewport rather than a
+            floating circle, without fading the card at the top. */}
         <div
-          className={cn("relative flex-1", compact ? "mt-5" : "mt-8")}
+          ref={ringRef}
+          className="relative mt-5 flex-1"
           style={{
             maskImage:
-              "linear-gradient(to bottom, black 0%, black 62%, transparent 96%)",
+              "linear-gradient(to bottom, black 0%, black 92%, transparent 100%)",
             WebkitMaskImage:
-              "linear-gradient(to bottom, black 0%, black 62%, transparent 96%)",
+              "linear-gradient(to bottom, black 0%, black 92%, transparent 100%)",
           }}
         >
           <motion.ul
@@ -140,7 +210,7 @@ export function ProjectWheel({ compact = false }: { compact?: boolean }) {
             style={{
               width: size.radius * 2,
               height: size.radius * 2,
-              top: size.cardH / 2,
+              top: size.cardH / 2 + size.inset,
               x: "-50%",
               rotate,
             }}
@@ -164,10 +234,15 @@ export function ProjectWheel({ compact = false }: { compact?: boolean }) {
                       project={item}
                       width={size.cardW}
                       height={size.cardH}
+                      visualHeight={size.visualH}
                       isActive={index === active}
                       dimmed={focused !== null && focused !== index}
                       onFocus={() => setFocused(index)}
                       onBlur={() => setFocused(null)}
+                      onOpen={() => {
+                        setViewing(index);
+                        setViewerOpen(true);
+                      }}
                     />
                   </motion.div>
                 </li>
@@ -176,6 +251,12 @@ export function ProjectWheel({ compact = false }: { compact?: boolean }) {
           </motion.ul>
         </div>
       </div>
+
+      <ProjectImageDialog
+        project={projects[viewing]}
+        open={viewerOpen}
+        onOpenChange={setViewerOpen}
+      />
     </div>
   );
 }
@@ -211,7 +292,7 @@ function Detail({
           <h3
             className={cn(
               "mt-2 font-bold leading-[1.15] tracking-[-0.025em] text-foreground",
-              compact ? "text-xl" : "mt-3 text-2xl md:text-4xl",
+              compact ? "text-xl" : "text-2xl md:text-4xl",
             )}
           >
             {project.title}
@@ -229,7 +310,7 @@ function Detail({
           <p
             className={cn(
               "mx-auto max-w-2xl text-muted-foreground",
-              compact ? "mt-3 line-clamp-4 text-meta" : "mt-4 text-body",
+              compact ? "mt-3 line-clamp-4 text-meta" : "mt-3 text-body",
             )}
           >
             {project.summary}
@@ -240,14 +321,14 @@ function Detail({
             compact={compact}
             className={cn(
               "mx-auto max-w-lg text-left",
-              compact ? "mt-3" : "mt-6",
+              compact ? "mt-3" : "mt-4",
             )}
           />
 
           <div
             className={cn(
               "flex flex-wrap justify-center gap-2",
-              compact ? "mt-3" : "mt-5",
+              compact ? "mt-3" : "mt-4",
             )}
           >
             {project.skills.slice(0, compact ? 3 : 4).map((skill) => (
@@ -263,7 +344,7 @@ function Detail({
 
           <ProjectLinks
             project={project}
-            className={cn("justify-center", compact ? "mt-3" : "mt-5")}
+            className={cn("justify-center", compact ? "mt-3" : "mt-4")}
           />
         </motion.div>
       </AnimatePresence>
@@ -271,7 +352,7 @@ function Detail({
       {/* Fixed-height rail under the panel: a progress read-out that does not
           reflow when a longer title swaps in. */}
       <div
-        className={cn("mx-auto flex w-40 gap-1.5", compact ? "mt-5" : "mt-8")}
+        className="mx-auto mt-5 flex w-40 gap-1.5"
         aria-hidden="true"
       >
         {Array.from({ length: count }, (_, i) => (
@@ -292,18 +373,22 @@ function RimCard({
   project,
   width,
   height,
+  visualHeight,
   isActive,
   dimmed,
   onFocus,
   onBlur,
+  onOpen,
 }: {
   project: Project;
   width: number;
   height: number;
+  visualHeight: number;
   isActive: boolean;
   dimmed: boolean;
   onFocus: () => void;
   onBlur: () => void;
+  onOpen: () => void;
 }) {
   return (
     <button
@@ -312,29 +397,29 @@ function RimCard({
       onMouseLeave={onBlur}
       onFocus={onFocus}
       onBlur={onBlur}
-      aria-label={project.title}
+      onClick={project.image ? onOpen : undefined}
+      aria-label={
+        project.image ? `${project.title}: view image full size` : project.title
+      }
       style={{ width, height }}
       className={cn(
         "group relative block overflow-hidden rounded-xl border bg-background text-left shadow-lg outline-none transition-all duration-500 ease-out focus-visible:ring-2 focus-visible:ring-brand",
+        project.image && "cursor-zoom-in",
         isActive
           ? "-translate-y-3 scale-105 border-brand/50"
           : "scale-100 border-border",
         dimmed && "opacity-40 grayscale",
       )}
     >
-      <ProjectVisual
-        project={project}
-        sizes="440px"
-        className={cn(
-          "transition-transform duration-700 ease-out",
-          isActive ? "scale-105" : "scale-100",
-        )}
-      />
-      {/* The scrim covers the lower third, where the title sits, rather than
-          washing over the whole picture. */}
-      <div className="absolute inset-0 bg-gradient-to-t from-background via-background/70 via-30% to-transparent to-60%" />
+      {/* The picture whole, with nothing laid over it. */}
+      <div className="relative w-full" style={{ height: visualHeight }}>
+        <ProjectVisual
+          project={project}
+          sizes={`${Math.round(width * 1.05)}px`}
+        />
+      </div>
 
-      <div className="absolute inset-x-0 bottom-0 p-4">
+      <div className="border-t border-border px-4 py-2.5">
         <p className="font-heading text-[11px] font-bold text-brand">
           {project.id}
         </p>
@@ -343,7 +428,7 @@ function RimCard({
         </p>
         <span
           className={cn(
-            "mt-2 block h-0.5 rounded-full bg-brand transition-all duration-500",
+            "mt-1.5 block h-0.5 rounded-full bg-brand transition-all duration-500",
             isActive ? "w-full opacity-100" : "w-0 opacity-0",
           )}
         />

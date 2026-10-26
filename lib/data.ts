@@ -146,7 +146,7 @@ export const projects = [
     ],
     skills: ["Product Strategy", "UI/UX Design", "Primary Research", "Figma"],
     visual: { icon: "trophy", keyword: "0 → 1" },
-    image: "",
+    image: "/Skia_Final_Image.png",
     links: [] as ProjectLink[],
     featured: true,
   },

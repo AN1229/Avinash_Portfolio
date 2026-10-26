@@ -9,6 +9,7 @@ import {
   ProjectImpact,
   ProjectLinks,
   ProjectVisual,
+  ProjectVisualZoom,
   type Project,
 } from "./ProjectParts";
 import { ProjectWheel } from "./ProjectWheel";
@@ -36,6 +37,7 @@ function ProjectCardContent({
           project={project}
           sizes="(max-width: 768px) 90vw, 560px"
         />
+        <ProjectVisualZoom project={project} />
       </div>
 
       <div>
